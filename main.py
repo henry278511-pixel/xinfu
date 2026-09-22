@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 import os
 import re
 import urllib3
@@ -34,8 +35,7 @@ HEADERS = {
 }
 
 
-# ==================== 1. 抓取期交所三大法人未平倉 ====================
-# ==================== 1. 抓取期交所三大法人未平倉 ====================
+# ==================== 1. 抓取期交所三大法人未平倉 (LINE Flex 原生卡片表格) ====================
 def get_taifex_summary():
   try:
     url = "https://www.taifex.com.tw/cht/3/futContractsDate"
@@ -66,12 +66,11 @@ def get_taifex_summary():
     for tr in soup.find_all("tr"):
       tds = [td.get_text(strip=True) for td in tr.find_all("td")]
 
-      # 第一列（含商品名稱）：直接依序解構，不需寫中括號索引
+      # 第一列（含序號與商品名稱，直接變數解構，不需寫索引中括號）
       if len(tds) >= 14:
         _, prod_name, id_type, _, _, _, _, net_trade, _, _, _, _, _, net_oi, *_ = (
             tds
         )
-
         for tp in target_prods:
           if tp in prod_name:
             current_prod = tp
@@ -79,7 +78,7 @@ def get_taifex_summary():
         else:
           current_prod = ""
 
-      # 第二、三列（投信、外資）：直接依序解構
+      # 第二、三列（投信、外資）
       elif len(tds) >= 12 and current_prod:
         id_type, _, _, _, _, net_trade, _, _, _, _, _, net_oi, *_ = tds
       else:
@@ -92,19 +91,59 @@ def get_taifex_summary():
 
     if not data:
       print("期交所查無資料或為休市日")
-      return f"{today_display}\n\n⚠️ 今日尚無期交所資料或為休市日"
+      return {
+          "type": "text",
+          "text": f"📊 臺指期未平倉 ({today_display})\n⚠️ 今日尚無期交所資料或為休市日",
+      }
 
-    # 依照您指定的風格排版
-    text_lines = [
-        today_display,
-        "",
-        "商品            淨未平倉量 (淨交易量)",
-        "------------------------------------",
+    # 組裝還原截圖樣式的深色原生表格卡片 (Flex Message)
+    body_contents = [
+        {
+            "type": "text",
+            "text": today_display,
+            "weight": "bold",
+            "size": "md",
+            "color": "#339af0",
+            "align": "center",
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "lg",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "商品",
+                    "size": "xs",
+                    "color": "#868e96",
+                    "flex": 3,
+                },
+                {
+                    "type": "text",
+                    "text": "淨未平倉量 (淨交易量)",
+                    "size": "xs",
+                    "color": "#868e96",
+                    "align": "end",
+                    "flex": 7,
+                },
+            ],
+        },
+        {"type": "separator", "margin": "xs", "color": "#495057"},
     ]
 
     for p in target_prods:
       if p in data:
-        text_lines.append(display_names[p])
+        # 商品分類標題（藍字）
+        body_contents.append({
+            "type": "text",
+            "text": display_names[p],
+            "weight": "bold",
+            "size": "sm",
+            "color": "#339af0",
+            "margin": "md",
+        })
+
+        # 法人數據明細
         for id_type, net_oi, net_trade in data[p]:
           short_id = "外資" if "外資" in id_type else id_type
 
@@ -121,17 +160,66 @@ def get_taifex_summary():
           except:
             net_trade_str = net_trade
 
-          text_lines.append(
-              f"  {short_id:<4} {net_oi_str:>10} ({net_trade_str:>6})"
-          )
-        text_lines.append("")
+          # 負數綠色(#51cf66)，正數橘紅色(#ff922b)
+          val_color = "#51cf66" if "-" in net_oi_str else "#ff922b"
 
-    text_lines.append(f"資料日期：{today_tw}")
-    return "\n".join(text_lines).strip()
+          body_contents.append({
+              "type": "box",
+              "layout": "horizontal",
+              "margin": "xs",
+              "contents": [
+                  {
+                      "type": "text",
+                      "text": f"  {short_id}",
+                      "size": "xs",
+                      "color": "#ced4da",
+                      "flex": 3,
+                  },
+                  {
+                      "type": "text",
+                      "text": f"{net_oi_str} ({net_trade_str})",
+                      "size": "xs",
+                      "color": val_color,
+                      "align": "end",
+                      "flex": 7,
+                  },
+              ],
+          })
+
+    body_contents.append(
+        {"type": "separator", "margin": "md", "color": "#495057"}
+    )
+    body_contents.append({
+        "type": "text",
+        "text": f"資料日期: {today_tw}",
+        "size": "xxs",
+        "color": "#868e96",
+        "align": "center",
+        "margin": "sm",
+    })
+
+    flex_message = {
+        "type": "flex",
+        "altText": f"臺指期未平倉 ({today_display})",
+        "contents": {
+            "type": "bubble",
+            "size": "kilo",
+            "styles": {"body": {"backgroundColor": "#282a36"}},
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": body_contents,
+            },
+        },
+    }
+    return flex_message
 
   except Exception as e:
     print(f"抓取期交所資料失敗: {e}")
-    return f"📊 臺指期未平倉 ({today_display})\n今日資料擷取略過"
+    return {
+        "type": "text",
+        "text": f"📊 臺指期未平倉 ({today_display})\n今日資料擷取略過",
+    }
 
 
 # ==================== 2. 抓取永豐期貨最新研報 PDF ====================
@@ -215,8 +303,7 @@ def upload_image(filepath):
   return None
 
 
-# ==================== 4. LINE 推播 ====================
-# ==================== 4. LINE 廣播群發 (發給所有好友) ====================
+# ==================== 4. LINE 廣播群發 (推送給所有好友) ====================
 def push_line(summary_msg, image_urls):
   if not LINE_CHANNEL_ACCESS_TOKEN:
     print("未設定 LINE_CHANNEL_ACCESS_TOKEN")
@@ -239,10 +326,10 @@ def push_line(summary_msg, image_urls):
       "Content-Type": "application/json",
       "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
   }
-  # 廣播不需要指定 "to"，只需帶上 messages
+
+  # 廣播群發：不填 to，LINE 會自動發給所有加該官方帳號好友的人
   body = {"messages": messages}
 
-  # 改用 broadcast API 端點
   res = requests.post(
       "https://api.line.me/v2/bot/message/broadcast", json=body, headers=headers
   )
