@@ -2,29 +2,25 @@ name: Daily Stock Push
 
 on:
   schedule:
-    # 每週一至週五 台灣時間 16:15 自動執行 (UTC 時間為 08:15)
-    - cron: '15 8 * * 1-5'
-  workflow_dispatch: # 支援手動點擊按鈕立即執行測試
+    # 每天台灣時間下午 3:45 自動執行（UTC 07:45，週一至週五）
+    - cron: '45 7 * * 1-5'
+  workflow_dispatch: # 保留隨時手動點擊測試的按鈕
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4 pymupdf pandas
+          pip install requests pymupdf beautifulsoup4 urllib3
 
       - name: Run script
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: |
-          python main.py
+        run: python main.py
