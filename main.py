@@ -216,12 +216,18 @@ def upload_image(filepath):
 
 
 # ==================== 4. LINE 推播 ====================
-def push_line(text, image_urls):
-  if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_ID:
-    print("未設定 LINE 金鑰")
+# ==================== 4. LINE 廣播群發 (發給所有好友) ====================
+def push_line(summary_msg, image_urls):
+  if not LINE_CHANNEL_ACCESS_TOKEN:
+    print("未設定 LINE_CHANNEL_ACCESS_TOKEN")
     return
 
-  messages = [{"type": "text", "text": text}]
+  # 自動判斷是 Flex 卡片物件還是純文字
+  if isinstance(summary_msg, dict):
+    messages = [summary_msg]
+  else:
+    messages = [{"type": "text", "text": str(summary_msg)}]
+
   for img_url in image_urls[:4]:
     messages.append({
         "type": "image",
@@ -233,12 +239,14 @@ def push_line(text, image_urls):
       "Content-Type": "application/json",
       "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
   }
-  body = {"to": LINE_USER_ID, "messages": messages}
+  # 廣播不需要指定 "to"，只需帶上 messages
+  body = {"messages": messages}
 
+  # 改用 broadcast API 端點
   res = requests.post(
-      "https://api.line.me/v2/bot/message/push", json=body, headers=headers
+      "https://api.line.me/v2/bot/message/broadcast", json=body, headers=headers
   )
-  print("LINE 發送結果:", res.status_code, res.text)
+  print("LINE 廣播發送結果:", res.status_code, res.text)
 
 
 # ==================== 主流程 ====================
