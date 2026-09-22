@@ -35,6 +35,7 @@ HEADERS = {
 
 
 # ==================== 1. 抓取期交所三大法人未平倉 ====================
+# ==================== 1. 抓取期交所三大法人未平倉 ====================
 def get_taifex_summary():
   try:
     url = "https://www.taifex.com.tw/cht/3/futContractsDate"
@@ -65,10 +66,12 @@ def get_taifex_summary():
     for tr in soup.find_all("tr"):
       tds = [td.get_text(strip=True) for td in tr.find_all("td")]
 
-      # 第一列（含序號與商品名稱，長度 >= 14）
+      # 第一列（含商品名稱）：直接依序解構，不需寫中括號索引
       if len(tds) >= 14:
-        prod_name = tds.strip()
-        # 比對目標商品
+        _, prod_name, id_type, _, _, _, _, net_trade, _, _, _, _, _, net_oi, *_ = (
+            tds
+        )
+
         for tp in target_prods:
           if tp in prod_name:
             current_prod = tp
@@ -76,16 +79,9 @@ def get_taifex_summary():
         else:
           current_prod = ""
 
-        if current_prod:
-          id_type = tds.strip()
-          net_trade = tds[7].strip()
-          net_oi = tds[13].strip()
-
-      # 第二、三列（投信、外資，因 rowspan 欄位數 >= 12）
+      # 第二、三列（投信、外資）：直接依序解構
       elif len(tds) >= 12 and current_prod:
-        id_type = tds[0].strip()
-        net_trade = tds[5].strip()
-        net_oi = tds[11].strip()
+        id_type, _, _, _, _, net_trade, _, _, _, _, _, net_oi, *_ = tds
       else:
         continue
 
@@ -98,7 +94,7 @@ def get_taifex_summary():
       print("期交所查無資料或為休市日")
       return f"{today_display}\n\n⚠️ 今日尚無期交所資料或為休市日"
 
-    # 按照截圖風格排版
+    # 依照您指定的風格排版
     text_lines = [
         today_display,
         "",
@@ -112,7 +108,6 @@ def get_taifex_summary():
         for id_type, net_oi, net_trade in data[p]:
           short_id = "外資" if "外資" in id_type else id_type
 
-          # 數值淨額處理（移除逗號，正數與零補加號）
           try:
             oi_num = int(net_oi.replace(",", ""))
             net_oi_str = str(oi_num)
