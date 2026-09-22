@@ -1,20 +1,18 @@
 import os
 import re
 import requests
-import fitz  # PyMuPDF
+import pymupdf  # 支援 PDF 轉圖片
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 import urllib3
 
-# 關閉 SSL 憑證警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==================== 環境變數 ====================
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
-# 台灣時間
 tw_tz = timezone(timedelta(hours=8))
 now_tw = datetime.now(tw_tz)
 today_tw = now_tw.strftime('%Y/%m/%d')
@@ -32,11 +30,14 @@ def get_taifex_summary():
         res = requests.get(url, headers=HEADERS, timeout=15, verify=False)
         res.encoding = 'big5'
         
-        if "查無資料" in res.text or len(res.text.strip()) < 50:
-            print("期交所回傳查無資料或內容為空")
+        # 解決 line 27 備註報錯：只保留正規欄位大於等於 14 的資料列，自動濾除底部的備註文字
+        valid_lines = [l for l in res.text.splitlines() if len(l.split(',')) >= 14]
+        if len(valid_lines) <= 1:
+            print("期交所回傳查無資料或為休市日")
             return f"📊 臺指期未平倉 ({today_display})\n⚠️ 今日尚無期交所資料或為休市日"
 
-        df = pd.read_csv(StringIO(res.text))
+        clean_csv = "\n".join(valid_lines)
+        df = pd.read_csv(StringIO(clean_csv))
         df.columns = [str(c).strip() for c in df.columns]
         
         target_map = {
@@ -75,14 +76,14 @@ def get_latest_pdf():
         print(f"正在搜尋永豐期貨研報: {list_url}")
         res = requests.get(list_url, headers=HEADERS, timeout=15, verify=False)
         
-        # 用正則表達式精準抓取 PDF 相對路徑
         pdf_matches = re.findall(r'(/upload/sinopac/researchContent/[a-zA-Z0-9]+\.pdf)', res.text)
         if not pdf_matches:
             print("網頁中未匹配到 PDF 路徑")
             return []
             
-        # 取前 1~2 份最新報告（通常是當日的盤後快訊與籌碼快訊）
-        pdf_urls = ["https://www.spf.com.tw" + p for p in dict.fromkeys(pdf_matches)[:2]]
+        # 修復 unhashable type: 'slice' 語法問題
+        unique_matches = list(dict.fromkeys(pdf_matches))[:2]
+        pdf_urls = ["https://www.spf.com.tw" + p for p in unique_matches]
         print(f"找到最新 PDF: {pdf_urls}")
         
         images = []
@@ -92,8 +93,7 @@ def get_latest_pdf():
             with open(pdf_path, "wb") as f:
                 f.write(pdf_data)
                 
-            doc = fitz.open(pdf_path)
-            # 轉換第一頁與第二頁（每份快訊最關鍵的兩頁）
+            doc = pymupdf.open(pdf_path)
             for page_idx in range(min(len(doc), 2)):
                 pix = doc[page_idx].get_pixmap(dpi=180)
                 img_name = f"doc_{idx+1}_page_{page_idx+1}.png"
@@ -106,20 +106,18 @@ def get_latest_pdf():
         print(f"下載/轉換 PDF 失敗: {e}")
         return []
 
-# ==================== 3. 免費圖床託管 (雙重備援) ====================
+# ==================== 3. 免費圖床託管 ====================
 def upload_image(filepath):
-    # 管道 1: Catbox
     try:
         with open(filepath, 'rb') as f:
             res = requests.post("https://catbox.moe/user/api.php", data={"reqtype": "fileupload"}, files={"fileToUpload": f}, timeout=20)
             if res.status_code == 200 and res.text.startswith("http"):
                 url = res.text.strip()
-                print(f"Catbox 上傳成功: {url}")
+                print(f"圖床上傳成功: {url}")
                 return url
     except Exception as e:
-        print(f"Catbox 失敗: {e}")
+        print(f"Catbox 上傳失敗: {e}")
 
-    # 管道 2: Tmpfiles (備援)
     try:
         with open(filepath, 'rb') as f:
             res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=20)
@@ -127,10 +125,10 @@ def upload_image(filepath):
                 raw_url = res.json().get("data", {}).get("url")
                 if raw_url:
                     dl_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                    print(f"Tmpfiles 上傳成功: {dl_url}")
+                    print(f"Tmpfiles 備援上傳成功: {dl_url}")
                     return dl_url
     except Exception as e:
-        print(f"Tmpfiles 失敗: {e}")
+        print(f"Tmpfiles 上傳失敗: {e}")
 
     return None
 
@@ -141,7 +139,6 @@ def push_line(text, image_urls):
         return
 
     messages = [{"type": "text", "text": text}]
-    # LINE 單次推播最多支援 5 則訊息（1 則文字 + 最多 4 張圖片）
     for img_url in image_urls[:4]:
         messages.append({
             "type": "image",
