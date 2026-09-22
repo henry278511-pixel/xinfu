@@ -1,7 +1,7 @@
 import os
 import re
 import requests
-import pymupdf  # 支援 PDF 轉圖片
+import pymupdf
 import pandas as pd
 from io import StringIO
 from datetime import datetime, timezone, timedelta
@@ -16,7 +16,7 @@ LINE_USER_ID = os.environ.get("LINE_USER_ID")
 tw_tz = timezone(timedelta(hours=8))
 now_tw = datetime.now(tw_tz)
 today_tw = now_tw.strftime('%Y/%m/%d')
-today_display = now_tw.strftime('%Y/%m/%d (週%w)').replace('週0', '週日').replace('週1', '週一').replace('週2', '週二').replace('週3', '週三').replace('週4', '週四').replace('週5', '週五').replace('週6', '週六')
+today_display = now_tw.strftime('%Y/%m/%d (週%w)').replace('週0', '週日').replace('週1', '週二').replace('週2', '週二').replace('週3', '週三').replace('週4', '週四').replace('週5', '週五').replace('週6', '週六')
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -30,15 +30,12 @@ def get_taifex_summary():
         res = requests.get(url, headers=HEADERS, timeout=15, verify=False)
         res.encoding = 'big5'
         
-        # 解決 line 27 備註報錯：只保留正規欄位大於等於 14 的資料列，自動濾除底部的備註文字
-        valid_lines = [l for l in res.text.splitlines() if len(l.split(',')) >= 14]
-        if len(valid_lines) <= 1:
-            print("期交所回傳查無資料或為休市日")
+        # 使用 on_bad_lines='skip' 自動略過底部備註，不誤砍正常資料
+        df = pd.read_csv(StringIO(res.text), on_bad_lines='skip')
+        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
+        
+        if df.empty or '商品名稱' not in df.columns:
             return f"📊 臺指期未平倉 ({today_display})\n⚠️ 今日尚無期交所資料或為休市日"
-
-        clean_csv = "\n".join(valid_lines)
-        df = pd.read_csv(StringIO(clean_csv))
-        df.columns = [str(c).strip() for c in df.columns]
         
         target_map = {
             '臺股期貨': '台指期',
@@ -50,16 +47,16 @@ def get_taifex_summary():
         text_lines = [f"📊 臺指期未平倉\n{today_display}", "商品  淨未平倉量 (淨交易量)", "------------------------"]
         
         for raw_name, display_name in target_map.items():
-            sub = df[df['商品名稱'].astype(str).str.strip() == raw_name]
+            sub = df[df['商品名稱'].astype(str).str.strip().str.replace('"', '') == raw_name]
             if sub.empty:
                 continue
             text_lines.append(f"【{display_name}】")
             for id_type in ['自營商', '投信', '外資及陸資']:
-                row = sub[sub['身份別'].astype(str).str.strip() == id_type]
+                row = sub[sub['身份別'].astype(str).str.strip().str.replace('"', '') == id_type]
                 short_id = '外資' if '外資' in id_type else id_type
                 if not row.empty:
-                    net_oi = int(str(row['多空淨額未平倉口數'].values[0]).replace(',', ''))
-                    net_trade = int(str(row['多空淨額交易口數'].values[0]).replace(',', ''))
+                    net_oi = int(float(str(row['多空淨額未平倉口數'].values[0]).replace(',', '')))
+                    net_trade = int(float(str(row['多空淨額交易口數'].values[0]).replace(',', '')))
                     sign = "+" if net_trade > 0 else ""
                     text_lines.append(f"  {short_id}: {net_oi} ({sign}{net_trade})")
             text_lines.append("")
@@ -73,7 +70,6 @@ def get_taifex_summary():
 def get_latest_pdf():
     try:
         list_url = "https://www.spf.com.tw/sinopacSPF/research/list.do?id=1709f20d3ff00000d8e2039e8984ed51"
-        print(f"正在搜尋永豐期貨研報: {list_url}")
         res = requests.get(list_url, headers=HEADERS, timeout=15, verify=False)
         
         pdf_matches = re.findall(r'(/upload/sinopac/researchContent/[a-zA-Z0-9]+\.pdf)', res.text)
@@ -81,7 +77,6 @@ def get_latest_pdf():
             print("網頁中未匹配到 PDF 路徑")
             return []
             
-        # 修復 unhashable type: 'slice' 語法問題
         unique_matches = list(dict.fromkeys(pdf_matches))[:2]
         pdf_urls = ["https://www.spf.com.tw" + p for p in unique_matches]
         print(f"找到最新 PDF: {pdf_urls}")
@@ -95,7 +90,7 @@ def get_latest_pdf():
                 
             doc = pymupdf.open(pdf_path)
             for page_idx in range(min(len(doc), 2)):
-                pix = doc[page_idx].get_pixmap(dpi=180)
+                pix = doc[page_idx].get_pixmap(dpi=150)
                 img_name = f"doc_{idx+1}_page_{page_idx+1}.png"
                 pix.save(img_name)
                 images.append(img_name)
@@ -106,29 +101,32 @@ def get_latest_pdf():
         print(f"下載/轉換 PDF 失敗: {e}")
         return []
 
-# ==================== 3. 免費圖床託管 ====================
+# ==================== 3. 直連圖床 (LINE 官方最推薦 Imgur + Freeimage) ====================
 def upload_image(filepath):
+    # 管道 1: Imgur (直連 CDN，LINE 支援度最佳)
     try:
-        with open(filepath, 'rb') as f:
-            res = requests.post("https://catbox.moe/user/api.php", data={"reqtype": "fileupload"}, files={"fileToUpload": f}, timeout=20)
-            if res.status_code == 200 and res.text.startswith("http"):
-                url = res.text.strip()
-                print(f"圖床上傳成功: {url}")
-                return url
+        headers = {"Authorization": "Client-ID 546c25a59c58ad7"}
+        with open(filepath, "rb") as f:
+            res = requests.post("https://api.imgur.com/3/image", headers=headers, files={"image": f}, timeout=20)
+        data = res.json()
+        if data.get("success"):
+            link = data["data"]["link"]
+            print(f"Imgur 上傳成功: {link}")
+            return link
     except Exception as e:
-        print(f"Catbox 上傳失敗: {e}")
+        print(f"Imgur 失敗: {e}")
 
+    # 管道 2: Freeimage.host (直連備援)
     try:
-        with open(filepath, 'rb') as f:
-            res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=20)
-            if res.status_code == 200:
-                raw_url = res.json().get("data", {}).get("url")
-                if raw_url:
-                    dl_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                    print(f"Tmpfiles 備援上傳成功: {dl_url}")
-                    return dl_url
+        with open(filepath, "rb") as f:
+            res = requests.post("https://freeimage.host/api/1/upload", data={"key": "6d207e02198a847aa98d0a2a901485a5", "action": "upload"}, files={"source": f}, timeout=20)
+        data = res.json()
+        if data.get("status_code") == 200:
+            link = data["image"]["url"]
+            print(f"Freeimage 上傳成功: {link}")
+            return link
     except Exception as e:
-        print(f"Tmpfiles 上傳失敗: {e}")
+        print(f"Freeimage 失敗: {e}")
 
     return None
 
