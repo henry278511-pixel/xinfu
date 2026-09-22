@@ -2,8 +2,7 @@ import os
 import re
 import requests
 import pymupdf
-import pandas as pd
-from io import StringIO
+from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import urllib3
 
@@ -16,7 +15,7 @@ LINE_USER_ID = os.environ.get("LINE_USER_ID")
 tw_tz = timezone(timedelta(hours=8))
 now_tw = datetime.now(tw_tz)
 today_tw = now_tw.strftime('%Y/%m/%d')
-today_display = now_tw.strftime('%Y/%m/%d (週%w)').replace('週0', '週日').replace('週1', '週二').replace('週2', '週二').replace('週3', '週三').replace('週4', '週四').replace('週5', '週五').replace('週6', '週六')
+today_display = now_tw.strftime('%Y/%m/%d (週%w)').replace('週0', '週日').replace('週1', '週一').replace('週2', '週二').replace('週3', '週三').replace('週4', '週四').replace('週5', '週五').replace('週6', '週六')
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -25,42 +24,67 @@ HEADERS = {
 # ==================== 1. 抓取期交所三大法人未平倉 ====================
 def get_taifex_summary():
     try:
-        url = f"https://www.taifex.com.tw/cht/3/futContractsDateView?queryStartDate={today_tw}&queryEndDate={today_tw}"
-        print(f"正在抓取期交所數據: {url}")
-        res = requests.get(url, headers=HEADERS, timeout=15, verify=False)
-        res.encoding = 'big5'
+        url = "https://www.taifex.com.tw/cht/3/futContractsDate"
+        payload = {
+            'queryType': '1',
+            'goBackType': '',
+            'queryDate': today_tw,
+            'commodity_id': 'all'
+        }
+        print(f"正在查詢期交所三大法人行情: {today_tw}")
+        res = requests.post(url, data=payload, headers=HEADERS, timeout=15, verify=False)
+        res.encoding = 'utf-8'
         
-        # 使用 on_bad_lines='skip' 自動略過底部備註，不誤砍正常資料
-        df = pd.read_csv(StringIO(res.text), on_bad_lines='skip')
-        df.columns = [str(c).strip().replace('"', '') for c in df.columns]
-        
-        if df.empty or '商品名稱' not in df.columns:
-            return f"📊 臺指期未平倉 ({today_display})\n⚠️ 今日尚無期交所資料或為休市日"
-        
-        target_map = {
+        soup = BeautifulSoup(res.text, 'html.parser')
+        target_prods = ['臺股期貨', '電子期貨', '金融期貨', '小型臺指期貨']
+        display_names = {
             '臺股期貨': '台指期',
             '電子期貨': '電子期',
             '金融期貨': '金融期',
             '小型臺指期貨': '小台指'
         }
         
-        text_lines = [f"📊 臺指期未平倉\n{today_display}", "商品  淨未平倉量 (淨交易量)", "------------------------"]
+        current_prod = ''
+        data = {}
         
-        for raw_name, display_name in target_map.items():
-            sub = df[df['商品名稱'].astype(str).str.strip().str.replace('"', '') == raw_name]
-            if sub.empty:
+        for tr in soup.find_all('tr'):
+            tds = [td.get_text(strip=True) for td in tr.find_all('td')]
+            if len(tds) >= 14:
+                current_prod = tds.strip()
+                id_type = tds.strip()
+                net_trade = tds.strip()
+                net_oi = tds[13].strip()
+            elif len(tds) >= 12 and current_prod:
+                id_type = tds[0].strip()
+                net_trade = tds.strip()
+                net_oi = tds.strip()
+            else:
                 continue
-            text_lines.append(f"【{display_name}】")
-            for id_type in ['自營商', '投信', '外資及陸資']:
-                row = sub[sub['身份別'].astype(str).str.strip().str.replace('"', '') == id_type]
-                short_id = '外資' if '外資' in id_type else id_type
-                if not row.empty:
-                    net_oi = int(float(str(row['多空淨額未平倉口數'].values[0]).replace(',', '')))
-                    net_trade = int(float(str(row['多空淨額交易口數'].values[0]).replace(',', '')))
-                    sign = "+" if net_trade > 0 else ""
-                    text_lines.append(f"  {short_id}: {net_oi} ({sign}{net_trade})")
-            text_lines.append("")
+                
+            if current_prod in target_prods:
+                if current_prod not in data:
+                    data[current_prod] = []
+                data[current_prod].append((id_type, net_oi, net_trade))
+                
+        if not data:
+            print("期交所查無資料或為休市日")
+            return f"📊 臺指期未平倉 ({today_display})\n⚠️ 今日尚無期交所資料或為休市日"
             
+        text_lines = [f"📊 臺指期未平倉\n{today_display}", "商品  淨未平倉量 (淨交易量)", "------------------------"]
+        for p in target_prods:
+            if p in data:
+                text_lines.append(f"【{display_names[p]}】")
+                for id_type, net_oi, net_trade in data[p]:
+                    short_id = '外資' if '外資' in id_type else id_type
+                    try:
+                        t_val = int(net_trade.replace(',', ''))
+                        sign = "+" if t_val > 0 else ""
+                        net_trade_str = f"{sign}{t_val}"
+                    except:
+                        net_trade_str = net_trade
+                    text_lines.append(f"  {short_id}: {net_oi} ({net_trade_str})")
+                text_lines.append("")
+                
         return "\n".join(text_lines).strip()
     except Exception as e:
         print(f"抓取期交所資料失敗: {e}")
@@ -101,9 +125,8 @@ def get_latest_pdf():
         print(f"下載/轉換 PDF 失敗: {e}")
         return []
 
-# ==================== 3. 直連圖床 (LINE 官方最推薦 Imgur + Freeimage) ====================
+# ==================== 3. 直連圖床 (Imgur + Freeimage) ====================
 def upload_image(filepath):
-    # 管道 1: Imgur (直連 CDN，LINE 支援度最佳)
     try:
         headers = {"Authorization": "Client-ID 546c25a59c58ad7"}
         with open(filepath, "rb") as f:
@@ -116,7 +139,6 @@ def upload_image(filepath):
     except Exception as e:
         print(f"Imgur 失敗: {e}")
 
-    # 管道 2: Freeimage.host (直連備援)
     try:
         with open(filepath, "rb") as f:
             res = requests.post("https://freeimage.host/api/1/upload", data={"key": "6d207e02198a847aa98d0a2a901485a5", "action": "upload"}, files={"source": f}, timeout=20)
