@@ -464,18 +464,11 @@ def push_line(image_urls, flex_card=None):
 
 
 # ==================== 主流程 ====================
-# ==================== 主流程 ====================
 if __name__ == "__main__":
   print("開始執行盤後推播腳本...")
 
   # 1. 抓取期交所未平倉數據
   raw_data = get_taifex_data()
-
-  # ⭐️【新增這 3 行休市防呆】⭐️
-  # 遇國定假日、颱風假或休市查無資料時，立即退出，不發送前一天的舊圖
-  if not raw_data:
-    print(f"⚠️ 今日 ({today_display}) 為台股休市日，自動取消今日推播！")
-    exit(0)
 
   # 2. 將原版未平倉資訊卡生成同款深色圖檔 (taifex_summary.png)
   summary_img = create_taifex_summary_image(raw_data)
