@@ -2,11 +2,12 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
-import urllib3
+import sys
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import pymupdf
 import requests
+import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -36,7 +37,7 @@ HEADERS = {
 }
 
 
-# ==================== 1. 抓取期交所三大法人未平倉 (保留原汁原味內容) ====================
+# ==================== 1. 抓取期交所三大法人未平倉 ====================
 def get_taifex_data():
   try:
     url = "https://www.taifex.com.tw/cht/3/futContractsDate"
@@ -63,9 +64,23 @@ def get_taifex_data():
 
       # 第一列（含序號與商品名稱）
       if len(tds) >= 14:
-        _, prod_name, id_type, _, _, _, _, net_trade, _, _, _, _, _, net_oi, *_ = (
-            tds
-        )
+        (
+            _,
+            prod_name,
+            id_type,
+            _,
+            _,
+            _,
+            _,
+            net_trade,
+            _,
+            _,
+            _,
+            _,
+            _,
+            net_oi,
+            *_,
+        ) = tds
         for tp in target_prods:
           if tp in prod_name:
             current_prod = tp
@@ -91,7 +106,7 @@ def get_taifex_data():
     return {}
 
 
-# ==================== 1-A. 原版 Flex Message 資訊卡 (完全保留) ====================
+# ==================== 1-A. 原版 Flex Message 資訊卡 ====================
 def build_taifex_flex(data):
   display_names = {
       "臺股期貨": "台指期",
@@ -215,12 +230,11 @@ def build_taifex_flex(data):
   }
 
 
-# ==================== 1-B. 將原版資訊卡繪製成「同款高解析圖檔」 (方便一鍵轉傳分享) ====================
+# ==================== 1-B. 將原版資訊卡繪製成「同款高解析圖檔」 ====================
 def create_taifex_summary_image(data):
   if not data:
     return None
 
-  # 支援繁體中文字型與負號顯示
   plt.rcParams["font.sans-serif"] = [
       "Noto Sans CJK TC",
       "Microsoft JhengHei",
@@ -281,7 +295,6 @@ def create_taifex_summary_image(data):
   y = 0.83
   for p in target_prods:
     if p in data:
-      # 商品標題 (藍字)
       ax.text(
           0.08,
           y,
@@ -306,7 +319,6 @@ def create_taifex_summary_image(data):
 
         val_color = "#51cf66" if "-" in oi_str else "#ff922b"
 
-        # 身分別
         ax.text(
             0.12,
             y,
@@ -316,7 +328,6 @@ def create_taifex_summary_image(data):
             ha="left",
             va="top",
         )
-        # 淨未平倉量 (淨交易量)
         ax.text(
             0.92,
             y,
@@ -431,19 +442,13 @@ def upload_image(filepath):
   return None
 
 
-# ==================== 4. LINE 廣播群發 (全部以圖片發送，支援一鍵分享) ====================
+# ==================== 4. LINE 廣播發送 ====================
 def push_line(image_urls, flex_card=None):
   if not LINE_CHANNEL_ACCESS_TOKEN:
     print("未設定 LINE_CHANNEL_ACCESS_TOKEN")
     return
 
   messages = []
-
-  # 若您仍想保留原版 Flex 資訊卡，可解除註解此段：
-  # if flex_card:
-  #     messages.append(flex_card)
-
-  # 將包含「原版未平倉圖卡」與「永豐研報圖片」全部以原生圖片發送 (LINE 單次最多 5 則訊息)
   for img_url in image_urls[:5]:
     messages.append({
         "type": "image",
@@ -465,18 +470,32 @@ def push_line(image_urls, flex_card=None):
 
 # ==================== 主流程 ====================
 if __name__ == "__main__":
-  print("開始執行盤後推播腳本...")
+  print(f"開始執行盤後推播腳本... 檢查日期: {today_display}")
 
-  # 1. 抓取期交所未平倉數據
+  # ----------------- 防呆 1：週末直接退出 -----------------
+  if now_tw.weekday() >= 5:
+    print(f"今天 ({today_display}) 為週末非交易日，略過推播。")
+    sys.exit(0)
+
+  # ----------------- 防呆 2：檢查期交所是否有今日行情 -----------------
   raw_data = get_taifex_data()
 
-  # 2. 將原版未平倉資訊卡生成同款深色圖檔 (taifex_summary.png)
+  # 若當天為國定假日、春節長假或颱風假，期交所查詢結果會是空的（或查無「臺股期貨」）
+  if not raw_data or "臺股期貨" not in raw_data:
+    print(
+        f"今日 ({today_tw}) 期交所查無交易資料，判定為【休市日】，安全終止，不推播舊圖！"
+    )
+    sys.exit(0)
+
+  print("檢測為正常開盤日，繼續生成圖卡與抓取研報...")
+
+  # 1. 將原版未平倉資訊卡生成同款深色圖檔 (taifex_summary.png)
   summary_img = create_taifex_summary_image(raw_data)
 
-  # 3. 抓取永豐期貨研報圖檔
+  # 2. 抓取永豐期貨研報圖檔
   pdf_imgs = get_latest_pdf()
 
-  # 4. 上傳圖床 (將未平倉資訊卡圖檔排在第一張)
+  # 3. 上傳圖床 (將未平倉資訊卡圖檔排在第一張)
   all_local_imgs = []
   if summary_img:
     all_local_imgs.append(summary_img)
@@ -488,9 +507,11 @@ if __name__ == "__main__":
     if url:
       uploaded_urls.append(url)
 
-  # 5. 生成原版 Flex 備用 (若需要)
-  flex_msg = build_taifex_flex(raw_data)
+  # 4. 推播圖片至 LINE
+  if uploaded_urls:
+    push_line(uploaded_urls, flex_card=None)
+    print("今日資料已成功推播至 LINE！")
+  else:
+    print("未生成任何圖片連結，略過推播。")
 
-  # 6. 推播圖片至 LINE (第一張即為可長按轉發的未平倉資訊卡圖片)
-  push_line(uploaded_urls, flex_card=None)
   print("腳本執行完畢！")
