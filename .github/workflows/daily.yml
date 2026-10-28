@@ -8,21 +8,15 @@ on:
 
 jobs:
   run-bot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10 # 最多執行 10 分鐘，防止伺服器或爬蟲卡死無限等待
+    # 【關鍵修改】直接指定穩定的 24.04 機房，避開 ubuntu-latest 正在升級 Ubuntu 26 的全球大塞車與通知
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
-      # 快取 pip 套件，加快每次執行的安裝速度
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-stock-bot-v1
 
       # 1. 安裝開源思源繁體中文字型 (避免圖片中的中文字變成方塊亂碼)
       - name: Install Chinese Fonts
