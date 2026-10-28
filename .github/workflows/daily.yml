@@ -2,24 +2,33 @@ name: Daily Stock Push
 
 on:
   schedule:
-    # 每天台灣時間下午 3:45 自動執行（UTC 07:45，週一至週五）
-    - cron: '45 7 * * 1-5'
+    # 每天台灣時間下午 3:37 自動執行（UTC 07:37，週一至週五）
+    - cron: '37 7 * * 1-5'
   workflow_dispatch: # 保留隨時手動點擊測試的按鈕
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # 最多執行 10 分鐘，防止伺服器或爬蟲卡死無限等待
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # 快取 pip 套件，加快每次執行的安裝速度
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-stock-bot-v1
 
       # 1. 安裝開源思源繁體中文字型 (避免圖片中的中文字變成方塊亂碼)
       - name: Install Chinese Fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y fonts-noto-cjk
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
 
       # 2. 安裝 Python 依賴套件 (加入了 matplotlib 繪圖套件)
       - name: Install dependencies
